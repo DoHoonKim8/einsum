@@ -165,10 +165,11 @@ pub fn einsum(equation: &str, input_tensors: &[&Tensor]) -> Tensor {
                 .chars()
                 .zip(tensor_dim.iter())
                 .for_each(|(index, dim)| {
-                    if index_to_dim.contains_key(&index) {
-                        common_indices_to_inputs.insert(index);
+                    if let std::collections::hash_map::Entry::Vacant(e) = index_to_dim.entry(index)
+                    {
+                        e.insert(*dim);
                     } else {
-                        index_to_dim.insert(index, *dim);
+                        common_indices_to_inputs.insert(index);
                     }
                 });
         });
@@ -212,28 +213,39 @@ pub fn einsum(equation: &str, input_tensors: &[&Tensor]) -> Tensor {
         .into_iter()
         .map(|dim| 0..dim)
         .multi_cartesian_product();
-    while let Some(entry_index) = output_entries_indices.next() {
+    let mut output_entries_indices_next = output_entries_indices.next();
+    loop {
         let mut output_entry = 0;
-        // for each input equation, check the index is whether
-        // contained in output equation.
-        // 1) If yes, bound that index to the same value with output index value
-        // 2) If no, range over all possible values for the index
-        // Return the slice of each input tensor with indices bounded correctly
-        let sliced_inputs = input_tensors
-            .iter()
-            .zip(inputs.iter())
-            .map(|(input_tensor, input_indices)| {
-                let mut sliced_dim = vec![];
-                input_indices.chars().for_each(|index| {
-                    if let Some(pos) = output_index.iter().position(|o| *o == index) {
-                        sliced_dim.push((entry_index[pos]..entry_index[pos] + 1).into());
-                    } else {
-                        sliced_dim.push((0..*index_to_dim.get(&index).unwrap()).into());
-                    }
-                });
-                input_tensor.slice(&sliced_dim)
-            })
-            .collect_vec();
+        let mut output_entry_index = vec![0; output_tensor.dims().len()];
+        let sliced_inputs = {
+            match output_entries_indices_next {
+                Some(entry_index) => {
+                    // for each input equation, check the index is whether
+                    // contained in output equation.
+                    // 1) If yes, bound that index to the same value with output index value
+                    // 2) If no, range over all possible values for the index
+                    // Return the slice of each input tensor with indices bounded correctly
+                    output_entry_index = entry_index.clone();
+                    input_tensors
+                        .iter()
+                        .zip(inputs.iter())
+                        .map(|(input_tensor, input_indices)| {
+                            let mut sliced_dim = vec![];
+                            input_indices.chars().for_each(|index| {
+                                if let Some(pos) = output_index.iter().position(|o| *o == index) {
+                                    sliced_dim
+                                        .push((entry_index[pos]..entry_index[pos] + 1).into());
+                                } else {
+                                    sliced_dim.push((0..*index_to_dim.get(&index).unwrap()).into());
+                                }
+                            });
+                            input_tensor.slice(&sliced_dim)
+                        })
+                        .collect_vec()
+                }
+                None => input_tensors.iter().map(|&t| t.clone()).collect_vec(),
+            }
+        };
         // For the indices which aren't contained in output equation,
         // iterate through the range of the common indices to input equations
         // and iterate through the range of uncommon indices, binding all the indices
@@ -317,7 +329,13 @@ pub fn einsum(equation: &str, input_tensors: &[&Tensor]) -> Tensor {
                 .product::<usize>();
             acc + term
         });
-        output_tensor.write(&entry_index, output_entry);
+        output_tensor.write(&output_entry_index, output_entry);
+
+        if let Some(output_entries_indices) = output_entries_indices.next() {
+            output_entries_indices_next = Some(output_entries_indices);
+        } else {
+            break;
+        }
     }
     output_tensor
 }
@@ -440,6 +458,110 @@ mod tests {
             Tensor::array(vec![6, 8, 10, 12]),
         ]
         .into();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn batch_mat_mul() {
+        let a = vec![
+            vec![
+                Tensor::array(vec![0, 1, 2, 3, 4]),
+                Tensor::array(vec![5, 6, 7, 8, 9]),
+            ]
+            .into(),
+            vec![
+                Tensor::array(vec![10, 11, 12, 13, 14]),
+                Tensor::array(vec![15, 16, 17, 18, 19]),
+            ]
+            .into(),
+            vec![
+                Tensor::array(vec![20, 21, 22, 23, 24]),
+                Tensor::array(vec![25, 26, 27, 28, 29]),
+            ]
+            .into(),
+        ]
+        .into();
+        let b = vec![
+            vec![
+                Tensor::array(vec![0, 1, 2]),
+                Tensor::array(vec![3, 4, 5]),
+                Tensor::array(vec![6, 7, 8]),
+                Tensor::array(vec![9, 10, 11]),
+                Tensor::array(vec![12, 13, 14]),
+            ]
+            .into(),
+            vec![
+                Tensor::array(vec![15, 16, 17]),
+                Tensor::array(vec![18, 19, 20]),
+                Tensor::array(vec![21, 22, 23]),
+                Tensor::array(vec![24, 25, 26]),
+                Tensor::array(vec![27, 28, 29]),
+            ]
+            .into(),
+            vec![
+                Tensor::array(vec![30, 31, 32]),
+                Tensor::array(vec![33, 34, 35]),
+                Tensor::array(vec![36, 37, 38]),
+                Tensor::array(vec![39, 40, 41]),
+                Tensor::array(vec![42, 43, 44]),
+            ]
+            .into(),
+        ]
+        .into();
+        let actual = einsum("ijk,ikl->ijl", &[&a, &b]);
+        let expected = vec![
+            vec![
+                Tensor::array(vec![90, 100, 110]),
+                Tensor::array(vec![240, 275, 310]),
+            ]
+            .into(),
+            vec![
+                Tensor::array(vec![1290, 1350, 1410]),
+                Tensor::array(vec![1815, 1900, 1985]),
+            ]
+            .into(),
+            vec![
+                Tensor::array(vec![3990, 4100, 4210]),
+                Tensor::array(vec![4890, 5025, 5160]),
+            ]
+            .into(),
+        ]
+        .into();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn tensor_contraction_2() {
+        let a = vec![
+            vec![
+                Tensor::array(vec![1, 2]),
+                Tensor::array(vec![3, 2]),
+                Tensor::array(vec![3, 4]),
+            ].into(),
+            vec![
+                Tensor::array(vec![3, 4]),
+                Tensor::array(vec![5, 1]),
+                Tensor::array(vec![2, 3]),
+            ].into(),
+            vec![
+                Tensor::array(vec![2, 3]),
+                Tensor::array(vec![4, 3]),
+                Tensor::array(vec![4, 5]),
+            ].into(),
+        ].into();
+        let b = vec![
+            Tensor::array(vec![4, 5]),
+            Tensor::array(vec![7, 8]),
+        ].into();
+        let c = vec![
+            Tensor::array(vec![4, 5, 7]),
+            Tensor::array(vec![8, 9, 9]),
+        ].into();
+        let actual = einsum("bn,anm,bm->ba", &[&c, &a, &b]);
+        let expected = vec![
+            Tensor::array(vec![390, 414, 534]),
+            Tensor::array(vec![994, 1153, 1384]),
+        ].into();
         assert_eq!(actual, expected);
     }
 }
