@@ -216,36 +216,19 @@ pub fn einsum(equation: &str, input_tensors: &[&Tensor]) -> Tensor {
     let mut output_entries_indices_next = output_entries_indices.next();
     loop {
         let mut output_entry = 0;
-        let mut output_entry_index = vec![0; output_tensor.dims().len()];
-        let sliced_inputs = {
-            match output_entries_indices_next {
-                Some(entry_index) => {
-                    // for each input equation, check the index is whether
-                    // contained in output equation.
-                    // 1) If yes, bound that index to the same value with output index value
-                    // 2) If no, range over all possible values for the index
-                    // Return the slice of each input tensor with indices bounded correctly
-                    output_entry_index = entry_index.clone();
-                    input_tensors
-                        .iter()
-                        .zip(inputs.iter())
-                        .map(|(input_tensor, input_indices)| {
-                            let mut sliced_dim = vec![];
-                            input_indices.chars().for_each(|index| {
-                                if let Some(pos) = output_index.iter().position(|o| *o == index) {
-                                    sliced_dim
-                                        .push((entry_index[pos]..entry_index[pos] + 1).into());
-                                } else {
-                                    sliced_dim.push((0..*index_to_dim.get(&index).unwrap()).into());
-                                }
-                            });
-                            input_tensor.slice(&sliced_dim)
-                        })
-                        .collect_vec()
-                }
-                None => input_tensors.iter().map(|&t| t.clone()).collect_vec(),
-            }
-        };
+        let output_entry_index =
+            if let Some(output_entry_index) = output_entries_indices_next.as_ref() {
+                output_entry_index.clone()
+            } else {
+                vec![0; output_tensor.dims().len()]
+            };
+        let sliced_inputs = bind_to_output_indices(
+            input_tensors,
+            &inputs,
+            &output_index,
+            output_entries_indices_next,
+            &index_to_dim,
+        );
         // For the indices which aren't contained in output equation,
         // iterate through the range of the common indices to input equations
         // and iterate through the range of uncommon indices, binding all the indices
@@ -253,28 +236,12 @@ pub fn einsum(equation: &str, input_tensors: &[&Tensor]) -> Tensor {
         let mut input_tuples = vec![];
         let mut common_indices_next = common_indices.next();
         loop {
-            let sliced_inputs = match common_indices_next {
-                Some(common_indices) => sliced_inputs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, slice)| {
-                        let mut sliced_dim = vec![];
-                        for (c, dim) in inputs[i].chars().zip(slice.dims()) {
-                            if let Some(pos) = common_indices_to_inputs_exclusive
-                                .iter()
-                                .position(|index| *index == c)
-                            {
-                                sliced_dim
-                                    .push((common_indices[pos]..common_indices[pos] + 1).into());
-                            } else {
-                                sliced_dim.push((0..*dim).into());
-                            }
-                        }
-                        slice.slice(&sliced_dim)
-                    })
-                    .collect_vec(),
-                None => sliced_inputs.clone(),
-            };
+            let sliced_inputs = bind_to_common_indices(
+                &sliced_inputs,
+                &inputs,
+                common_indices_next,
+                &common_indices_to_inputs_exclusive,
+            );
             // iterate over non common indices
             let mut non_common_indices_next = non_common_indices.next();
             loop {
@@ -338,6 +305,69 @@ pub fn einsum(equation: &str, input_tensors: &[&Tensor]) -> Tensor {
         }
     }
     output_tensor
+}
+
+fn bind_to_output_indices(
+    input_tensors: &[&Tensor],
+    input_indices: &[&str],
+    output_indices: &[char],
+    output_indices_values: Option<Vec<usize>>,
+    index_to_dim: &HashMap<char, usize>,
+) -> Vec<Tensor> {
+    match output_indices_values {
+        Some(entry_index) => {
+            // for each input equation, check the index is whether
+            // contained in output equation.
+            // 1) If yes, bound that index to the same value with output index value
+            // 2) If no, range over all possible values for the index
+            // Return the slice of each input tensor with indices bounded correctly
+            input_tensors
+                .iter()
+                .zip(input_indices.iter())
+                .map(|(input_tensor, input_indices)| {
+                    let mut sliced_dim = vec![];
+                    input_indices.chars().for_each(|index| {
+                        if let Some(pos) = output_indices.iter().position(|o| *o == index) {
+                            sliced_dim.push((entry_index[pos]..entry_index[pos] + 1).into());
+                        } else {
+                            sliced_dim.push((0..*index_to_dim.get(&index).unwrap()).into());
+                        }
+                    });
+                    input_tensor.slice(&sliced_dim)
+                })
+                .collect_vec()
+        }
+        None => input_tensors.iter().map(|&t| t.clone()).collect_vec(),
+    }
+}
+
+fn bind_to_common_indices(
+    input_tensors: &[Tensor],
+    input_indices: &[&str],
+    common_indices: Option<Vec<usize>>,
+    common_indices_to_inputs_exclusive: &[char],
+) -> Vec<Tensor> {
+    match common_indices {
+        Some(common_indices) => input_tensors
+            .iter()
+            .enumerate()
+            .map(|(i, slice)| {
+                let mut sliced_dim = vec![];
+                for (c, dim) in input_indices[i].chars().zip(slice.dims()) {
+                    if let Some(pos) = common_indices_to_inputs_exclusive
+                        .iter()
+                        .position(|index| *index == c)
+                    {
+                        sliced_dim.push((common_indices[pos]..common_indices[pos] + 1).into());
+                    } else {
+                        sliced_dim.push((0..*dim).into());
+                    }
+                }
+                slice.slice(&sliced_dim)
+            })
+            .collect_vec(),
+        None => input_tensors.iter().cloned().collect_vec(),
+    }
 }
 
 #[cfg(test)]
@@ -537,31 +567,30 @@ mod tests {
                 Tensor::array(vec![1, 2]),
                 Tensor::array(vec![3, 2]),
                 Tensor::array(vec![3, 4]),
-            ].into(),
+            ]
+            .into(),
             vec![
                 Tensor::array(vec![3, 4]),
                 Tensor::array(vec![5, 1]),
                 Tensor::array(vec![2, 3]),
-            ].into(),
+            ]
+            .into(),
             vec![
                 Tensor::array(vec![2, 3]),
                 Tensor::array(vec![4, 3]),
                 Tensor::array(vec![4, 5]),
-            ].into(),
-        ].into();
-        let b = vec![
-            Tensor::array(vec![4, 5]),
-            Tensor::array(vec![7, 8]),
-        ].into();
-        let c = vec![
-            Tensor::array(vec![4, 5, 7]),
-            Tensor::array(vec![8, 9, 9]),
-        ].into();
+            ]
+            .into(),
+        ]
+        .into();
+        let b = vec![Tensor::array(vec![4, 5]), Tensor::array(vec![7, 8])].into();
+        let c = vec![Tensor::array(vec![4, 5, 7]), Tensor::array(vec![8, 9, 9])].into();
         let actual = einsum("bn,anm,bm->ba", &[&c, &a, &b]);
         let expected = vec![
             Tensor::array(vec![390, 414, 534]),
             Tensor::array(vec![994, 1153, 1384]),
-        ].into();
+        ]
+        .into();
         assert_eq!(actual, expected);
     }
 }
