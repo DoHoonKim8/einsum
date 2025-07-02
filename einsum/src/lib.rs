@@ -375,6 +375,19 @@ mod tests {
     use crate::{Tensor, einsum};
 
     #[test]
+    fn diagonal() {
+        let a = vec![
+            Tensor::array(vec![1, 0, 0]),
+            Tensor::array(vec![0, 1, 0]),
+            Tensor::array(vec![0, 0, 1]),
+        ].into();
+        let b = Tensor::array(vec![1, 2, 3]);
+        let actual = einsum("ii,j->", &[&a, &b]);
+        let expected = Tensor::Scalar(18);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn mat_transpose() {
         let a = vec![Tensor::array(vec![0, 1, 2]), Tensor::array(vec![3, 4, 5])].into();
         let actual = einsum("ij->ji", &[&a]);
