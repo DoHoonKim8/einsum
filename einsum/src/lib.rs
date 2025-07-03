@@ -6,6 +6,8 @@ use std::{
 
 use itertools::Itertools;
 
+pub mod freivalds;
+
 #[derive(Clone, Debug)]
 pub enum Tensor {
     Scalar(usize),
@@ -380,7 +382,8 @@ mod tests {
             Tensor::array(vec![1, 0, 0]),
             Tensor::array(vec![0, 1, 0]),
             Tensor::array(vec![0, 0, 1]),
-        ].into();
+        ]
+        .into();
         let b = Tensor::array(vec![1, 2, 3]);
         let actual = einsum("ii,j->", &[&a, &b]);
         let expected = Tensor::Scalar(18);
