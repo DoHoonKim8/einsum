@@ -6,7 +6,9 @@ use std::{
 
 use itertools::Itertools;
 
+pub mod circuit;
 pub mod freivalds;
+pub mod contraction_planner;
 
 #[derive(Clone, Debug)]
 pub enum Tensor {
@@ -215,6 +217,7 @@ pub fn einsum(equation: &str, input_tensors: &[&Tensor]) -> Tensor {
         .into_iter()
         .map(|dim| 0..dim)
         .multi_cartesian_product();
+    // ik,kj->ij
     let mut output_entries_indices_next = output_entries_indices.next();
     loop {
         let mut output_entry = 0;

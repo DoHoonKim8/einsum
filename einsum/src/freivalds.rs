@@ -75,6 +75,7 @@ pub fn freivalds(
         .unwrap();
     let mut updated_output_equation = vec![output.to_string()];
     if common_indices_to_inputs_exclusive.is_empty() || output.is_empty() {
+        // Hadamard or outer product or dot product
         if einsum(equation, input_tensors) == *output_tensor {
             return Ok(());
         } else {
@@ -115,6 +116,18 @@ pub fn freivalds(
         &input_tensors.iter().collect_vec(),
     );
 
+    // A = M x N
+    // flatten(A) -> single column, row-major
+    // B = L x M x N
+    // flatten(B) -> two columns (two phases)
+    //  - B_1 -> single column, LMN entries, L groups of M subgroups of N scalars
+    //  - B_1 dot product with [r, r^2, ..., r^N] output: L groups of M scalars
+    //  - B_2 -> single column, LM entries, L groups of M
+    //  - B_2 dot product with [q, q^2, ..., q^M] output: L scalars
+    //  - B_3 -> single column, L entries
+    //  - B_3 dot product with [s, s^2, ..., s^L] output: b (a scalar)
+    // TODO: does q need to be in a separate phase?
+
     // 5: do einsum logic on output equation
     // TODO : instead of calling `einsum`, reorder the contraction to make the number of multiplications small
     let mut updated_output_equation = updated_output_equation.join(",");
@@ -123,6 +136,9 @@ pub fn freivalds(
         &updated_output_equation,
         &output_tensors.iter().collect_vec(),
     );
+
+    println!("updated_input_equations : {:?}", updated_input_equations);
+    println!("updated_output_equation : {:?}", updated_output_equation);
 
     // 6: check whether two squashed results are the same
     assert_eq!(squashed_input, squashed_output);
@@ -216,6 +232,21 @@ mod tests {
         ]
         .into();
         let equation = "ijk,ikl->ijl";
+        // k,k->
+        // ikl,l->ik
+        // ik,i->k
+        // ijk,j->ik
+        // ik,i->k
+        // k,k->
+
+        // \sum_{i} r_i (\sum_{j} r'_j A_{ijk}) (\sum_{l} r''_l B_{ikl})
+        // [\sum_{i} r_i (\sum_{j} r'_j A_{ijk})] • [\sum_{i} r_i (\sum_{l} r''_l B_{ikl})]
+
+        // \sum_{k} A_{ijk}B_{ikl} = C_{ijl}
+        // \sum_{i} r_i \sum_{j} r'_j \sum_{l} r''_l C_{ijl} -> output
+        // \sum_{i} r_i \sum_{j} r'_j \sum_{l} r''_l \sum_{k} A_{ijk}B_{ikl} -> input
+
+        // A (B r) = Cr
         let output = einsum(equation, &[&a, &b]);
         freivalds(equation, &[&a, &b], &output)
     }
@@ -234,6 +265,7 @@ mod tests {
         ]
         .into();
         let equation = "inj,jk->ik";
+        // nj,j->
         let output = einsum(equation, &[&a, &b]);
         freivalds(equation, &[&a, &b], &output)
     }
