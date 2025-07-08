@@ -4,6 +4,7 @@ Self-study Rust implementation of Pytorch einsum function
 
 ## Generalization of Freivalds' algorithm to einsum
 
+```
 // A = M x N
 // flatten(A) -> single column, row-major
 // B = L x M x N
@@ -59,6 +60,8 @@ Self-study Rust implementation of Pytorch einsum function
 //
 // - \sum_{b}
 // (\sum_{b} r_b W_{bn} Y_{bm})
+```
+
 ```rust
 struct SubConfig {
     // W, Y
@@ -116,20 +119,22 @@ Config 1
 |    |
 
 
+```
 // output equation side:
 // z = r_b Z q_a
 // z = \sum_{a} q_a \sum_{b} r_b Z_{a,b}
 // z = \sum_{a} \sum_{b} (q_a r_b) Z_{a,b}
+```
 
 The following is the advice columns that we need.
+
 | input tensors | input randomness | input running sum | output tensor | output randomness | output running sum |
+| ------------- | ---------------- | ----------------- | ------------- | ----------------- | ------------------ |
 
 For input equation side, the first step is to find the contraction path that has the smallest number of multiplications. This can be found by some contraction planner after augmenting input equation indices with challenge vector indices. (at compile-time)
 We will flatten each tensors (including challenge vectors) in row-major into a single column.
 
 If path is given as the vector of `(usize, usize)`, where each indicates the index of column, then we can group top-level circuit configuration into the following multiple sub-configurations. Actually this `SubConfig` constraints the dot product relation between two inputs. However, we should also cache the intermediate result of tensor operation into a separate column. So we also have to consider these intermediate columns before scheduling the path.
-
-| input tensors | input randomness | input running sum | input intermediate |
 
 ```rust
 struct SubConfig {
