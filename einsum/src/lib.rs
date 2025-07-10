@@ -7,8 +7,8 @@ use std::{
 use itertools::Itertools;
 
 pub mod circuit;
-pub mod freivalds;
 pub mod contraction_planner;
+pub mod freivalds;
 
 #[derive(Clone, Debug)]
 pub enum Tensor {

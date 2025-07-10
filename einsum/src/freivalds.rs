@@ -232,12 +232,9 @@ mod tests {
         ]
         .into();
         let equation = "ijk,ikl->ijl";
-        // k,k->
         // ikl,l->ik
-        // ik,i->k
         // ijk,j->ik
-        // ik,i->k
-        // k,k->
+        // i,ik,ik->
 
         // \sum_{i} r_i (\sum_{j} r'_j A_{ijk}) (\sum_{l} r''_l B_{ikl})
         // [\sum_{i} r_i (\sum_{j} r'_j A_{ijk})] • [\sum_{i} r_i (\sum_{l} r''_l B_{ikl})]
@@ -265,7 +262,14 @@ mod tests {
         ]
         .into();
         let equation = "inj,jk->ik";
+        // i,inj->nj
+        // jk,k->j
         // nj,j->
+
+        // \sum_{n} (\sum_{j} ((\sum_{i} r_i A_{inj}) (\sum_{k} r'_k B_{jk})))
+
+        // \sum_{n} \sum_{j} A_{inj} B_{jk} = C_{ik}
+        // \sum_{i} r_i \sum_{k} r'_k \sum_{n} \sum_{j} A_{inj} B_{jk} = \sum_{i} r_i \sum_{k} r'_k C_{ik}
         let output = einsum(equation, &[&a, &b]);
         freivalds(equation, &[&a, &b], &output)
     }
