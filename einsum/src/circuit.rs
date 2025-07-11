@@ -140,6 +140,8 @@ struct Config<F: Field> {
     output_summations: Vec<SummationConfig<F>>,
     // One challenge per output axis
     challenges: Vec<Challenge>,
+    // TODO : remove this, bake challenges into constraints
+    challenge_columns: Vec<Column<Advice>>,
     _marker: PhantomData<F>,
 }
 
@@ -232,17 +234,33 @@ impl<F: Field> Config<F> {
         for (i, (summation_config, challenge)) in
             self.output_summations.iter().zip(challenges).enumerate()
         {
-            // Powers of the challenge up to dim
-            let powers_of_challenge = (0..output.dims[i])
-                .scan(Value::known(F::ONE), |state, _| {
-                    *state = *state * challenge;
-                    Some(*state)
-                })
-                .collect_vec();
+            let powers_of_challenge = layouter.assign_region(
+                || "witness powers of challenge",
+                |mut region| {
+                    // Powers of the challenge up to dim
+                    let powers_of_challenge = (0..output.dims[i])
+                        .scan(Value::known(F::ONE), |state, _| {
+                            *state = *state * challenge;
+                            Some(*state)
+                        })
+                        .collect_vec();
+                    let mut assigned_values = vec![];
+                    for (offset, value) in powers_of_challenge.into_iter().enumerate() {
+                        let value = region.assign_advice(
+                            || "",
+                            self.challenge_columns[i],
+                            offset,
+                            || value,
+                        )?;
+                        assigned_values.push(value);
+                    }
+                    Ok(assigned_values)
+                },
+            )?;
             intermediate_values = summation_config.assign_output(
                 layouter.namespace(|| ""),
                 &intermediate_values,
-                powers_of_challenge,
+                &powers_of_challenge,
             )?;
         }
 
@@ -304,8 +322,6 @@ impl<F: Field> Config<F> {
 /// This consists of multiple running sum (i.e. dot product) arguments.
 /// Each `SummationConfig` constraints element-wise multiplication and summation between input tensors.
 struct SummationConfig<F: Field> {
-    // TODO remove this, bake challenge into constraints
-    challenge: Column<Advice>,
     dot_products: Vec<DotProductConfig<F>>,
 }
 
@@ -320,18 +336,12 @@ impl<F: Field> SummationConfig<F> {
         // TODO optimise choice of advice columns globally
         let inputs: Vec<_> = (0..num_inputs).map(|_| meta.advice_column()).collect();
         let running_sum = meta.advice_column();
-        // TODO remove this, bake challenge into constraints
-        let challenge = meta.advice_column_in(SecondPhase);
-
         let mut dot_products = vec![];
         for _ in 0..num_dot_products {
             dot_products.push(DotProductConfig::new(meta, &inputs, running_sum));
         }
 
-        Self {
-            dot_products,
-            challenge,
-        }
+        Self { dot_products }
     }
 
     // vec![vec![0,1,2]]
@@ -363,29 +373,17 @@ impl<F: Field> SummationConfig<F> {
         &self,
         mut layouter: impl Layouter<F>,
         tensor: &[AssignedCell<F, F>],
-        powers_of_challenge: Vec<Value<F>>,
+        powers_of_challenge: &[AssignedCell<F, F>],
     ) -> Result<Vec<AssignedCell<F, F>>, Error> {
         let num_dot_products = self.dot_products.len();
-
-        // Witness powers of challenge
-        let mut challenge_tensor = vec![];
-        layouter.assign_region(
-            || "witness powers of challenge",
-            |mut region| {
-                for (offset, value) in powers_of_challenge.iter().enumerate() {
-                    let value = region.assign_advice(|| "", self.challenge, offset, || *value)?;
-                    challenge_tensor.push(value);
-                }
-                Ok(())
-            },
-        )?;
-
+        let dot_product_len = powers_of_challenge.len();
+        assert_eq!(tensor.len(), num_dot_products * dot_product_len);
         // Split tensor and challenge vector into dot products
         let mut dot_product_results = vec![];
-        let dot_product_len = powers_of_challenge.len();
         for (idx, tensor) in tensor.chunks_exact(dot_product_len).enumerate() {
-            let tensors = vec![tensor.to_vec(), challenge_tensor.clone()];
-            let result = self.dot_products[idx].assign(layouter.namespace(|| ""), tensors)?;
+            let tensors = vec![tensor, powers_of_challenge];
+            let result =
+                self.dot_products[idx].assign(layouter.namespace(|| ""), tensors.as_slice())?;
             dot_product_results.push(result);
         }
 
@@ -404,15 +402,16 @@ impl<F: Field> DotProductConfig<F> {
     fn assign(
         &self,
         mut layouter: impl Layouter<F>,
-        tensors: Vec<Vec<AssignedCell<F, F>>>,
+        tensors: &[&[AssignedCell<F, F>]],
     ) -> Result<AssignedCell<F, F>, Error> {
         assert_eq!(tensors.len(), self.inputs.len());
+        assert!(tensors.iter().map(|t| t.len()).all_equal());
         let dot_product_len = tensors[0].len();
         layouter.assign_region(
             || "",
             |mut region| {
                 // Copy `tensors` values into appropriate cells
-                for (offset, inputs) in izip!(tensors.iter()).enumerate() {
+                for (offset, inputs) in izip!(tensors).copied().enumerate() {
                     for (col, cell) in self.inputs.iter().zip(inputs) {
                         cell.copy_advice(|| "", &mut region, *col, offset)?;
                     }
