@@ -45,33 +45,31 @@ pub enum Tensor<F: Field> {
 impl<F: Field> Tensor<F> {
     fn dims(&self) -> Vec<usize> {
         match self {
-            Self::Scalar(_) => vec![0],
-            Self::Vector { dims, inner } => dims.clone(),
+            Self::Scalar(_) => vec![],
+            Self::Vector { dims, .. } => dims.clone(),
         }
     }
-}
 
-impl<F: Field> Tensor<F> {
     fn flatten_ordered(&self, order: Vec<usize>) -> Vec<Value<F>> {
         // Flatten along axes in default order
         let flattened = self.flatten();
-        let dims: Vec<usize> = self.dims();
+        let dims = self.dims();
         let mut stride = once(1)
             .chain(dims.iter().skip(1).rev().scan(1, |state, dim| {
-                *state = *state * dim;
+                *state *= dim;
                 Some(*state)
             }))
             .collect_vec();
         stride.reverse();
 
-        let mut permuted_dims = vec![0; dims.len()];
-        for (permuted_idx, dims_idx) in order.iter().enumerate() {
-            permuted_dims[permuted_idx] = dims[*dims_idx];
+        let mut permuted_dims = vec![];
+        for dims_idx in order.iter() {
+            permuted_dims.push(dims[*dims_idx]);
         }
 
         let mut permuted_stride = once(1)
             .chain(permuted_dims.iter().skip(1).rev().scan(1, |state, dim| {
-                *state = *state * dim;
+                *state *= dim;
                 Some(*state)
             }))
             .collect_vec();
@@ -111,8 +109,8 @@ impl<F: Field> Tensor<F> {
             .multi_cartesian_product()
             .collect();
 
-        for coord in coords.iter() {
-            let (orig_idx, permuted_idx) = permuted_coord(coord.clone());
+        for coord in coords.into_iter() {
+            let (orig_idx, permuted_idx) = permuted_coord(coord);
             ordered_flattened[permuted_idx] = flattened[orig_idx];
         }
 
@@ -446,7 +444,7 @@ impl<F: Field> DotProductConfig<F> {
                     }
                 }
 
-                Ok(result.as_ref().unwrap().clone())
+                Ok(result.unwrap())
             },
         )
     }
